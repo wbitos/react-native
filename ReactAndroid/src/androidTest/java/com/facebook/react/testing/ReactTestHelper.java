@@ -8,70 +8,157 @@
 
 package com.facebook.react.testing;
 
+import javax.annotation.Nullable;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+import android.app.Instrumentation;
+import android.content.Context;
+import android.support.test.InstrumentationRegistry;
 import android.view.View;
 import android.view.ViewGroup;
 
-import com.facebook.react.bridge.CatalystInstanceImpl;
-import com.facebook.react.bridge.JSBundleLoader;
-import com.facebook.react.bridge.NativeModuleCallExceptionHandler;
-import com.facebook.react.bridge.JSCJavaScriptExecutor;
+import com.facebook.react.EagerModuleProvider;
+import com.facebook.react.ReactInstanceManager;
+import com.facebook.react.bridge.CatalystInstance;
+import com.facebook.react.bridge.JavaScriptModuleRegistry;
+import com.facebook.react.bridge.ModuleSpec;
 import com.facebook.react.bridge.NativeModule;
-import com.facebook.react.bridge.NativeModuleRegistry;
-import com.facebook.react.bridge.JavaScriptModulesConfig;
+import com.facebook.react.bridge.NativeModuleCallExceptionHandler;
+import com.facebook.react.bridge.WritableNativeMap;
 import com.facebook.react.bridge.queue.ReactQueueConfigurationSpec;
+import com.facebook.react.cxxbridge.CatalystInstanceImpl;
+import com.facebook.react.cxxbridge.JSBundleLoader;
+import com.facebook.react.cxxbridge.JSCJavaScriptExecutor;
+import com.facebook.react.cxxbridge.JavaScriptExecutor;
+import com.facebook.react.cxxbridge.NativeModuleRegistry;
+import com.facebook.react.module.model.ReactModuleInfo;
 
 import com.android.internal.util.Predicate;
 
 public class ReactTestHelper {
+  private static class DefaultReactTestFactory implements ReactTestFactory {
+    private static class ReactInstanceEasyBuilderImpl implements ReactInstanceEasyBuilder {
 
-  public static class ReactInstanceEasyBuilder {
+      private final List<ModuleSpec> mModuleSpecList = new ArrayList<>();
+      private final JavaScriptModuleRegistry.Builder mJSModuleRegistryBuilder =
+        new JavaScriptModuleRegistry.Builder();
 
-    private final ReactIntegrationTestCase mTestCase;
-    private final NativeModuleRegistry.Builder mNativeModuleRegistryBuilder;
-    private final JavaScriptModulesConfig.Builder mJSModulesConfigBuilder;
+      private @Nullable Context mContext;
 
-    private ReactInstanceEasyBuilder(ReactIntegrationTestCase testCase) {
-      mTestCase = testCase;
-      mNativeModuleRegistryBuilder = new NativeModuleRegistry.Builder();
-      mJSModulesConfigBuilder = new JavaScriptModulesConfig.Builder();
-    }
+      @Override
+      public ReactInstanceEasyBuilder setContext(Context context) {
+        mContext = context;
+        return this;
+      }
 
-    public CatalystInstanceImpl build() {
-      CatalystInstanceImpl instance = mTestCase.new ReactTestInstanceBuilder()
+      @Override
+      public ReactInstanceEasyBuilder addNativeModule(NativeModule nativeModule) {
+        mModuleSpecList.add(
+          new ModuleSpec(nativeModule.getClass(), new EagerModuleProvider(nativeModule)));
+        return this;
+      }
+
+      @Override
+      public ReactInstanceEasyBuilder addJSModule(Class moduleInterfaceClass) {
+        mJSModuleRegistryBuilder.add(moduleInterfaceClass);
+        return this;
+      }
+
+      @Override
+      public CatalystInstance build() {
+        JavaScriptExecutor executor = null;
+        try {
+          executor = new JSCJavaScriptExecutor.Factory(new WritableNativeMap()).create();
+        } catch (Exception e) {
+          throw new RuntimeException(e);
+        }
+        return new CatalystInstanceImpl.Builder()
           .setReactQueueConfigurationSpec(ReactQueueConfigurationSpec.createDefault())
-          .setJSExecutor(new JSCJavaScriptExecutor())
-          .setRegistry(mNativeModuleRegistryBuilder.build())
-          .setJSModulesConfig(mJSModulesConfigBuilder.build())
-          .setJSBundleLoader(JSBundleLoader.createFileLoader(
-                  mTestCase.getContext(),
-                  "assets://AndroidTestBundle.js"))
+          .setJSExecutor(executor)
+          .setRegistry(new NativeModuleRegistry(
+            mModuleSpecList,
+            Collections.<Class, ReactModuleInfo>emptyMap(),
+            false))
+          .setJSModuleRegistry(mJSModuleRegistryBuilder.build())
+          .setJSBundleLoader(JSBundleLoader.createAssetLoader(
+                               mContext,
+                               "assets://AndroidTestBundle.js"))
           .setNativeModuleCallExceptionHandler(
-              new NativeModuleCallExceptionHandler() {
+            new NativeModuleCallExceptionHandler() {
                 @Override
                 public void handleException(Exception e) {
                   throw new RuntimeException(e);
                 }
-              })
+            })
           .build();
-      instance.runJSBundle();
-      mTestCase.waitForBridgeAndUIIdle();
-      return instance;
+      }
     }
 
-    public ReactInstanceEasyBuilder addNativeModule(NativeModule module) {
-      mNativeModuleRegistryBuilder.add(module);
-      return this;
+    @Override
+    public ReactInstanceEasyBuilder getCatalystInstanceBuilder() {
+      return new ReactInstanceEasyBuilderImpl();
     }
 
-    public ReactInstanceEasyBuilder addJSModule(Class moduleInterfaceClass) {
-      mJSModulesConfigBuilder.add(moduleInterfaceClass);
-      return this;
+    @Override
+    public ReactInstanceManager.Builder getReactInstanceManagerBuilder() {
+      return ReactInstanceManager.builder();
     }
   }
 
-  public static ReactInstanceEasyBuilder catalystInstanceBuilder(
-      ReactIntegrationTestCase testCase) {
-    return new ReactInstanceEasyBuilder(testCase);
+  public static ReactTestFactory getReactTestFactory() {
+    Instrumentation inst = InstrumentationRegistry.getInstrumentation();
+    if (!(inst instanceof ReactTestFactory)) {
+      return new DefaultReactTestFactory();
+    }
+
+    return (ReactTestFactory) inst;
+  }
+
+  public static ReactTestFactory.ReactInstanceEasyBuilder catalystInstanceBuilder(
+      final ReactIntegrationTestCase testCase) {
+    final ReactTestFactory.ReactInstanceEasyBuilder builder =
+      getReactTestFactory().getCatalystInstanceBuilder();
+    ReactTestFactory.ReactInstanceEasyBuilder postBuilder =
+      new ReactTestFactory.ReactInstanceEasyBuilder() {
+        @Override
+        public ReactTestFactory.ReactInstanceEasyBuilder setContext(Context context) {
+          builder.setContext(context);
+          return this;
+        }
+
+        @Override
+        public ReactTestFactory.ReactInstanceEasyBuilder addNativeModule(NativeModule module) {
+          builder.addNativeModule(module);
+          return this;
+        }
+
+        @Override
+        public ReactTestFactory.ReactInstanceEasyBuilder addJSModule(Class moduleInterfaceClass) {
+          builder.addJSModule(moduleInterfaceClass);
+          return this;
+        }
+
+        @Override
+        public CatalystInstance build() {
+          final CatalystInstance instance = builder.build();
+          testCase.initializeWithInstance(instance);
+          instance.runJSBundle();
+          InstrumentationRegistry.getInstrumentation().runOnMainSync(new Runnable() {
+            @Override
+            public void run() {
+              instance.initialize();
+            }
+          });
+          testCase.waitForBridgeAndUIIdle();
+          return instance;
+        }
+      };
+
+    postBuilder.setContext(testCase.getContext());
+    return postBuilder;
   }
 
   /**

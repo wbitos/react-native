@@ -9,19 +9,21 @@
 
 package com.facebook.react.bridge;
 
+import javax.annotation.Nullable;
+
 /**
  * Interface that represents a JavaScript Promise which can be passed to the native module as a
  * method parameter.
  *
  * Methods annotated with {@link ReactMethod} that use {@link Promise} as type of the last parameter
- * will be marked as "remoteAsync" and will return a promise when invoked from JavaScript.
+ * will be marked as "promise" and will return a promise when invoked from JavaScript.
  */
 public interface Promise {
 
   /**
    * Successfully resolve the Promise.
    */
-  void resolve(Object value);
+  void resolve(@Nullable Object value);
 
   /**
    * Report an error which wasn't caused by an exception.

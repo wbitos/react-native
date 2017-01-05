@@ -11,6 +11,7 @@
 
 #import "RCTBridge.h"
 #import "RCTScrollView.h"
+#import "RCTShadowView.h"
 #import "RCTUIManager.h"
 
 @interface RCTScrollView (Private)
@@ -28,6 +29,12 @@ RCT_ENUM_CONVERTER(UIScrollViewKeyboardDismissMode, (@{
   // Backwards compatibility
   @"onDrag": @(UIScrollViewKeyboardDismissModeOnDrag),
 }), UIScrollViewKeyboardDismissModeNone, integerValue)
+
+RCT_ENUM_CONVERTER(UIScrollViewIndicatorStyle, (@{
+  @"default": @(UIScrollViewIndicatorStyleDefault),
+  @"black": @(UIScrollViewIndicatorStyleBlack),
+  @"white": @(UIScrollViewIndicatorStyleWhite),
+}), UIScrollViewIndicatorStyleDefault, integerValue)
 
 @end
 
@@ -49,12 +56,15 @@ RCT_EXPORT_VIEW_PROPERTY(centerContent, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(automaticallyAdjustContentInsets, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(decelerationRate, CGFloat)
 RCT_EXPORT_VIEW_PROPERTY(directionalLockEnabled, BOOL)
+RCT_EXPORT_VIEW_PROPERTY(indicatorStyle, UIScrollViewIndicatorStyle)
 RCT_EXPORT_VIEW_PROPERTY(keyboardDismissMode, UIScrollViewKeyboardDismissMode)
 RCT_EXPORT_VIEW_PROPERTY(maximumZoomScale, CGFloat)
 RCT_EXPORT_VIEW_PROPERTY(minimumZoomScale, CGFloat)
-RCT_EXPORT_VIEW_PROPERTY(pagingEnabled, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(scrollEnabled, BOOL)
+#if !TARGET_OS_TV
+RCT_EXPORT_VIEW_PROPERTY(pagingEnabled, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(scrollsToTop, BOOL)
+#endif
 RCT_EXPORT_VIEW_PROPERTY(showsHorizontalScrollIndicator, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(showsVerticalScrollIndicator, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(stickyHeaderIndices, NSIndexSet)
@@ -65,16 +75,20 @@ RCT_EXPORT_VIEW_PROPERTY(scrollIndicatorInsets, UIEdgeInsets)
 RCT_EXPORT_VIEW_PROPERTY(snapToInterval, int)
 RCT_EXPORT_VIEW_PROPERTY(snapToAlignment, NSString)
 RCT_REMAP_VIEW_PROPERTY(contentOffset, scrollView.contentOffset, CGPoint)
-RCT_EXPORT_VIEW_PROPERTY(onRefreshStart, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onScrollBeginDrag, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onScroll, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onScrollEndDrag, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onMomentumScrollBegin, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onMomentumScrollEnd, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onScrollAnimationEnd, RCTDirectEventBlock)
 
-- (NSDictionary<NSString *, id> *)constantsToExport
-{
-  return @{
-    @"DecelerationRate": @{
-      @"normal": @(UIScrollViewDecelerationRateNormal),
-      @"fast": @(UIScrollViewDecelerationRateFast),
-    },
-  };
+// overflow is used both in css-layout as well as by react-native. In css-layout
+// we always want to treat overflow as scroll but depending on what the overflow
+// is set to from js we want to clip drawing or not. This piece of code ensures
+// that css-layout is always treating the contents of a scroll container as
+// overflow: 'scroll'.
+RCT_CUSTOM_SHADOW_PROPERTY(overflow, YGOverflow, RCTShadowView) {
+  view.overflow = YGOverflowScroll;
 }
 
 RCT_EXPORT_METHOD(getContentSize:(nonnull NSNumber *)reactTag
@@ -116,30 +130,16 @@ RCT_EXPORT_METHOD(calculateChildFrames:(nonnull NSNumber *)reactTag
   }];
 }
 
-RCT_EXPORT_METHOD(endRefreshing:(nonnull NSNumber *)reactTag)
-{
-  [self.bridge.uiManager addUIBlock:
-   ^(__unused RCTUIManager *uiManager, NSDictionary<NSNumber *, RCTScrollView *> *viewRegistry) {
-
-    RCTScrollView *view = viewRegistry[reactTag];
-    if (!view || ![view isKindOfClass:[RCTScrollView class]]) {
-      RCTLogError(@"Cannot find RCTScrollView with tag #%@", reactTag);
-      return;
-    }
-
-    [view endRefreshing];
-  }];
-}
-
 RCT_EXPORT_METHOD(scrollTo:(nonnull NSNumber *)reactTag
-                  withOffset:(CGPoint)offset
+                  offsetX:(CGFloat)x
+                  offsetY:(CGFloat)y
                   animated:(BOOL)animated)
 {
   [self.bridge.uiManager addUIBlock:
    ^(__unused RCTUIManager *uiManager, NSDictionary<NSNumber *, UIView *> *viewRegistry){
     UIView *view = viewRegistry[reactTag];
     if ([view conformsToProtocol:@protocol(RCTScrollableProtocol)]) {
-      [(id<RCTScrollableProtocol>)view scrollToOffset:offset animated:animated];
+      [(id<RCTScrollableProtocol>)view scrollToOffset:(CGPoint){x, y} animated:animated];
     } else {
       RCTLogError(@"tried to scrollTo: on non-RCTScrollableProtocol view %@ "
                   "with tag #%@", view, reactTag);
@@ -161,18 +161,6 @@ RCT_EXPORT_METHOD(zoomToRect:(nonnull NSNumber *)reactTag
                   "with tag #%@", view, reactTag);
     }
   }];
-}
-
-- (NSArray<NSString *> *)customDirectEventTypes
-{
-  return @[
-    @"scrollBeginDrag",
-    @"scroll",
-    @"scrollEndDrag",
-    @"scrollAnimationEnd",
-    @"momentumScrollBegin",
-    @"momentumScrollEnd",
-  ];
 }
 
 @end
